@@ -23,7 +23,7 @@ class SVDLoraLinear(nn.Module, LoraLayer):
     """SVD LoRA implemented in a dense layer using SVD decomposition."""
     
     # Override adapter_layer_names to include SVD-specific parameters
-    adapter_layer_names: tuple[str, ...] = ("lora_coeffs_A", "lora_coeffs_B", "lora_U", "lora_Vh")
+    adapter_layer_names: tuple[str, ...] = ("lora_coeffs_A", "lora_coeffs_B")
     # All names of other parameters that may contain adapter-related parameters
     other_param_names: tuple[str, ...] = ("r", "lora_alpha", "scaling", "lora_dropout")
 

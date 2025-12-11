@@ -214,11 +214,10 @@ class TestSVDLoRA:
         peft_model.train()
         
         # Check that SVD LoRA parameters require gradients
-        trainable_params = 0
+        trainable_params = len([p for p in peft_model.parameters() if p.requires_grad])
         for name, param in peft_model.named_parameters():
             if 'lora_coeffs_' in name:
                 assert param.requires_grad, f"Parameter {name} should require gradients"
-                trainable_params += 1
                 
         # Should have trainable parameters for both lora_coeffs_A and lora_coeffs_B for each linear layer
         # We have 2 linear layers (linear1 and linear2), each with lora_coeffs_A and lora_coeffs_B
@@ -296,4 +295,76 @@ class TestSVDLoRA:
         
         # Outputs should be different
         assert not torch.allclose(output1, output2)
+    
+    def test_ckpt_content(self):
+        """Test that SVD LoRA checkpoint content matches expected format."""
+        # Create a simple model
+        model = SimpleModel()
         
+        # Create a LoRA config with SVD LoRA
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=32,
+            target_modules=["linear1", "linear2"],
+            use_svdlora=True,
+            bias="none"
+        )
+        
+        # Apply LoRA to the model
+        peft_model = get_peft_model(model, lora_config)
+        
+        # Save checkpoint
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            peft_model.save_pretrained(tmpdirname)
+            
+            import safetensors
+            with safetensors.safe_open(f"{tmpdirname}/adapter_model.safetensors", framework="pt") as f:
+                # ['base_model.model.linear1.lora_U', 'base_model.model.linear1.lora_Vh', 'base_model.model.linear1.lora_coeffs_A.weight', 'base_model.model.linear1.lora_coeffs_B.weight', 'base_model.model.linear2.lora_U', 'base_model.model.linear2.lora_Vh', ...]
+                layer = ['linear1', 'linear2']
+                component = ['lora_U', 'lora_Vh', 'lora_coeffs_A.weight', 'lora_coeffs_B.weight']
+                
+                for l in layer:
+                    for c in component:
+                        assert f"base_model.model.{l}.{c}" in f.keys()
+
+    def test_fsdp(self):
+        def setup(rank, world_size):
+            import os
+            """初始化分布式环境"""
+            os.environ['MASTER_ADDR'] = 'localhost'
+            os.environ['MASTER_PORT'] = '12355'
+            
+            # 初始化分布式进程组
+            import torch.distributed as dist
+            dist.init_process_group("nccl" if torch.cuda.is_available() else "gloo", rank=rank, world_size=world_size)
+        setup(0, 1)
+
+
+        """Test that SVD LoRA works with FSDP."""
+        # Create a simple model
+        model = SimpleModel()
+        
+        # Create a LoRA config with SVD LoRA
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=32,
+            target_modules=["linear1", "linear2"],
+            use_svdlora=True,
+            bias="none"
+        )
+        
+        # Apply LoRA to the model
+        device = torch.device("cpu")
+        peft_model = get_peft_model(model, lora_config)
+        
+        # Wrap model with FSDP
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        from peft.utils.other import fsdp_auto_wrap_policy
+        peft_model = FSDP(peft_model, 
+                                              device_id=device,auto_wrap_policy=fsdp_auto_wrap_policy(peft_model))
+        
+        # Check that SVD LoRA parameters require gradients
+        trainable_params = len([p for p in peft_model.parameters() if p.requires_grad])
+        assert trainable_params == 4  # 2 params (A,B) * 2 layers (linear1, linear2)

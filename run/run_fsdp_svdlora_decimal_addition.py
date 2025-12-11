@@ -77,14 +77,6 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=True):
 
     # Add lambda policy for LoRA modules if is_lora is True
     if is_lora:
-
-        def lambda_policy_fn(module):
-            return bool(
-                len(list(module.named_children())) == 0
-                and getattr(module, "weight", None) is not None
-                and module.weight.requires_grad
-            )
-
         lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
         policies.append(lambda_policy)
 
@@ -110,6 +102,16 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=True):
         auto_wrap_policy = functools.partial(_or_policy, policies=policies)
 
     return auto_wrap_policy
+def lambda_policy_fn(module):
+    return bool(
+        len(list(module.named_children())) == 0
+        and getattr(module, "weight", None) is not None
+        and module.weight.requires_grad
+    )
+def print_module_recursively(module, indent=0):
+    for name, child in module.named_children():
+        print("  " * indent + f"{name}: {type(child)} {lambda_policy_fn(child)}")
+        print_module_recursively(child, indent + 1)
 
 
 # 生成十进制加法训练数据
@@ -267,6 +269,8 @@ def main(rank, world_size, args):
     peft_model = get_peft_model(model, lora_config)
     if rank == 0:
         print(peft_model)
+        print_module_recursively(peft_model)
+        
     # 使用FSDP包装模型
     fsdp_model = FSDP(
         peft_model,
