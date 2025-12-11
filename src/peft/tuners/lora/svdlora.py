@@ -19,12 +19,11 @@ import torch.nn.functional as F
 
 from .layer import LoraLayer
 
-
 class SVDLoraLinear(nn.Module, LoraLayer):
     """SVD LoRA implemented in a dense layer using SVD decomposition."""
     
     # Override adapter_layer_names to include SVD-specific parameters
-    adapter_layer_names: tuple[str, ...] = ("lora_coeffs_A", "lora_coeffs_B")
+    adapter_layer_names: tuple[str, ...] = ("lora_coeffs_A", "lora_coeffs_B", "U", "Vh")
     # All names of other parameters that may contain adapter-related parameters
     other_param_names: tuple[str, ...] = ("r", "lora_alpha", "scaling", "lora_dropout")
 
@@ -49,6 +48,9 @@ class SVDLoraLinear(nn.Module, LoraLayer):
         del self.lora_embedding_A
         del self.lora_embedding_B
         self.fan_in_fan_out = fan_in_fan_out
+        # Initialize ParameterDict for U and Vh matrices
+        self.U = nn.ParameterDict({})
+        self.Vh = nn.ParameterDict({})
 
         self._active_adapter = adapter_name
         self.update_layer(
@@ -87,9 +89,9 @@ class SVDLoraLinear(nn.Module, LoraLayer):
             U, S, Vh = torch.linalg.svd(W, full_matrices=False)
             
             dtype = base_weight.dtype
-            # Register buffers for U and Vh matrices
-            self.register_buffer(f'U_{adapter_name}', U.to(dtype))   # Frozen Output Basis
-            self.register_buffer(f'Vh_{adapter_name}', Vh.to(dtype)) # Frozen Input Basis
+            # Store U and Vh matrices as parameters without gradients in ParameterDict
+            self.U[adapter_name] = nn.Parameter(U.to(dtype), requires_grad=False)   # Frozen Output Basis
+            self.Vh[adapter_name] = nn.Parameter(Vh.to(dtype), requires_grad=False) # Frozen Input Basis
             
             # Store SVD dimensions
             k = U.shape[1]  # Number of singular values
@@ -97,15 +99,23 @@ class SVDLoraLinear(nn.Module, LoraLayer):
         # Create coefficient parameters specifically for SVD LoRA
         # Coefficients for A (Input side) - shape (r, k)
         if not hasattr(self, 'lora_coeffs_A'):
-            self.lora_coeffs_A = nn.ParameterDict()
-        self.lora_coeffs_A[adapter_name] = nn.Parameter(torch.zeros(r, k, dtype=base_weight.dtype))
+            self.lora_coeffs_A = nn.ModuleDict()
+        # Using Linear layer without bias to store coefficients as trainable parameters
+        lora_A_layer = nn.Linear(k, r, bias=False)
+        # Initialize with zeros
+        with torch.no_grad():
+            lora_A_layer.weight.zero_()
+        self.lora_coeffs_A[adapter_name] = lora_A_layer
 
-
-        
         # Coefficients for B (Output side) - shape (k, r)
         if not hasattr(self, 'lora_coeffs_B'):
-            self.lora_coeffs_B = nn.ParameterDict()
-        self.lora_coeffs_B[adapter_name] = nn.Parameter(torch.zeros(k, r, dtype=base_weight.dtype))
+            self.lora_coeffs_B = nn.ModuleDict()
+        # Using Linear layer without bias to store coefficients as trainable parameters
+        lora_B_layer = nn.Linear(r, k, bias=False)
+        # Initialize with zeros
+        with torch.no_grad():
+            lora_B_layer.weight.zero_()
+        self.lora_coeffs_B[adapter_name] = lora_B_layer
         
         # Set other parameters
         self.r[adapter_name] = r
@@ -139,8 +149,11 @@ class SVDLoraLinear(nn.Module, LoraLayer):
 
         if adapter_name in self.lora_coeffs_A.keys():
             # Initialize coefficient matrices for SVD LoRA
-            nn.init.kaiming_uniform_(self.lora_coeffs_A[adapter_name], a=5**0.5)
-            nn.init.zeros_(self.lora_coeffs_B[adapter_name])
+            lora_A_layer = self.lora_coeffs_A[adapter_name]
+            lora_B_layer = self.lora_coeffs_B[adapter_name]
+            # Initialize A with Kaiming uniform and B with zeros
+            nn.init.kaiming_uniform_(lora_A_layer.weight, a=5**0.5)
+            nn.init.zeros_(lora_B_layer.weight)
 
     def merge(self, safe_merge: bool = False, adapter_names: list[str] | None = None) -> None:
         raise NotImplementedError("SVD LoRA merging is not implemented yet.")
@@ -155,15 +168,16 @@ class SVDLoraLinear(nn.Module, LoraLayer):
         Args:
             adapter_name (str): The name of the adapter for which the delta weight should be computed.
         """
-        U = getattr(self, f'U_{adapter_name}')
-        Vh = getattr(self, f'Vh_{adapter_name}')
+        U = self.U[adapter_name]
+        Vh = self.Vh[adapter_name]
         
-        lora_coeffs_A = self.lora_coeffs_A[adapter_name]
-        lora_coeffs_B = self.lora_coeffs_B[adapter_name]
+        # Get weights from the Linear layers using proper parameter access
+        lora_coeffs_A = self.lora_coeffs_A[adapter_name].weight.data  # Shape: (r, k)
+        lora_coeffs_B = self.lora_coeffs_B[adapter_name].weight.data  # Shape: (k, r)
         
         # Reconstruct effective A and B matrices
-        effective_A = lora_coeffs_A @ Vh
-        effective_B = U @ lora_coeffs_B
+        effective_A = lora_coeffs_A @ Vh  # Shape: (r, n)
+        effective_B = U @ lora_coeffs_B   # Shape: (m, r)
         
         device = effective_B.device
         dtype = effective_B.dtype
@@ -204,10 +218,8 @@ class SVDLoraLinear(nn.Module, LoraLayer):
                 if active_adapter not in self.lora_coeffs_A.keys():
                     continue
 
-                U = getattr(self, f'U_{active_adapter}')
-                Vh = getattr(self, f'Vh_{active_adapter}')
-                lora_coeffs_A = self.lora_coeffs_A[active_adapter]
-                lora_coeffs_B = self.lora_coeffs_B[active_adapter]
+                U = self.U[active_adapter]
+                Vh = self.Vh[active_adapter]
                 dropout = self.lora_dropout[active_adapter]
                 scaling = self.scaling[active_adapter]
 
@@ -215,10 +227,11 @@ class SVDLoraLinear(nn.Module, LoraLayer):
                 x_dropout = dropout(x)
                 
                 # SVD Path: x -> Vh.T -> lora_coeffs_A.T -> lora_coeffs_B.T -> U.T
-                x_k = x_dropout @ Vh.T 
-                x_r = x_k @ lora_coeffs_A.T 
-                x_k_out = x_r @ lora_coeffs_B.T
-                lora_out = x_k_out @ U.T
+                x_k = x_dropout @ Vh.T  # Shape: (*, k)
+                # x_r = x_k @ lora_coeffs_A.T  # Shape: (*, r)
+                x_r = self.lora_coeffs_A[active_adapter](x_k)
+                x_k_out = self.lora_coeffs_B[active_adapter](x_r)  # Shape: (*, k)
+                lora_out = x_k_out @ U.T  # Shape: (*, m)
                 
                 result = result + lora_out * scaling
 

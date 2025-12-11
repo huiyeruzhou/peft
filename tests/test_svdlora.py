@@ -61,8 +61,8 @@ class TestSVDLoRA:
         U, S, Vh = torch.linalg.svd(base_weight.data.float(), full_matrices=False)
         k = U.shape[1]  # Number of singular values
         
-        assert svd_lora_layer.lora_coeffs_A['default'].shape == (4, k)  # (r, k)
-        assert svd_lora_layer.lora_coeffs_B['default'].shape == (k, 4)  # (k, r)
+        assert svd_lora_layer.lora_coeffs_A['default'].weight.shape == (4, k)  # (r, k)
+        assert svd_lora_layer.lora_coeffs_B['default'].weight.shape == (k, 4)  # (k, r)
         
     def test_svdlora_svd_decomposition(self):
         """Test that SVD decomposition is correctly computed and stored."""
@@ -73,13 +73,15 @@ class TestSVDLoRA:
         # Create SVDLoraLinear
         svd_lora_layer = SVDLoraLinear(original_layer, "default", r=4)
         
-        # Check that U and Vh matrices are stored as buffers
-        assert hasattr(svd_lora_layer, 'U_default')
-        assert hasattr(svd_lora_layer, 'Vh_default')
+        # Check that U and Vh matrices are stored as Parameters in ParameterDict
+        assert hasattr(svd_lora_layer, 'U')
+        assert hasattr(svd_lora_layer, 'Vh')
         
         # Check that the stored matrices have correct shapes
-        U = svd_lora_layer.U_default
-        Vh = svd_lora_layer.Vh_default
+        U = svd_lora_layer.U['default']
+        Vh = svd_lora_layer.Vh['default']
+        assert not U.requires_grad
+        assert not Vh.requires_grad
         
         assert U.shape == (20, min(10, 20))  # (out_features, min(in_features, out_features))
         assert Vh.shape == (min(10, 20), 10)  # (min(in_features, out_features), in_features)
@@ -101,8 +103,8 @@ class TestSVDLoRA:
         # Initialize coefficients with some values
         torch.manual_seed(0)
         with torch.no_grad():
-            svd_lora_layer.lora_coeffs_A['default'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['default']))
-            svd_lora_layer.lora_coeffs_B['default'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['default']))
+            svd_lora_layer.lora_coeffs_A['default'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['default'].weight))
+            svd_lora_layer.lora_coeffs_B['default'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['default'].weight))
         
         # Get delta weight
         delta_weight = svd_lora_layer.get_delta_weight("default")
@@ -111,10 +113,11 @@ class TestSVDLoRA:
         assert delta_weight.shape == original_layer.weight.shape
         
         # Check that delta weight is computed correctly using SVD formulation
-        U = svd_lora_layer.U_default
-        Vh = svd_lora_layer.Vh_default
-        coeffs_A = svd_lora_layer.lora_coeffs_A['default']
-        coeffs_B = svd_lora_layer.lora_coeffs_B['default']
+        # Add SVD LoRA contribution
+        U = svd_lora_layer.U['default']
+        Vh = svd_lora_layer.Vh['default']
+        coeffs_A = svd_lora_layer.lora_coeffs_A['default'].weight
+        coeffs_B = svd_lora_layer.lora_coeffs_B['default'].weight
         scaling = svd_lora_layer.scaling['default']
         
         # Reconstruct effective A and B matrices
@@ -147,10 +150,10 @@ class TestSVDLoRA:
             expected_output = original_layer(x)
             
         # Add SVD LoRA contribution
-        U = svd_lora_layer.U_default
-        Vh = svd_lora_layer.Vh_default
-        coeffs_A = svd_lora_layer.lora_coeffs_A['default']
-        coeffs_B = svd_lora_layer.lora_coeffs_B['default']
+        U = svd_lora_layer.U['default']
+        Vh = svd_lora_layer.Vh['default']
+        coeffs_A = svd_lora_layer.lora_coeffs_A['default'].weight
+        coeffs_B = svd_lora_layer.lora_coeffs_B['default'].weight
         scaling = svd_lora_layer.scaling['default']
         
         # Apply SVD LoRA transformation
@@ -186,8 +189,8 @@ class TestSVDLoRA:
             if isinstance(module, SVDLoraLinear):
                 svd_lora_layers_found += 1
                 # Check that SVD components are present
-                assert hasattr(module, 'U_default')
-                assert hasattr(module, 'Vh_default')
+                assert hasattr(module, 'U')
+                assert hasattr(module, 'Vh')
                 assert hasattr(module, 'lora_coeffs_A')
                 assert hasattr(module, 'lora_coeffs_B')
                 
@@ -273,10 +276,10 @@ class TestSVDLoRA:
         # Initialize coefficients with different values for each adapter
         torch.manual_seed(0)
         with torch.no_grad():
-            svd_lora_layer.lora_coeffs_A['adapter1'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['adapter1']))
-            svd_lora_layer.lora_coeffs_B['adapter1'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['adapter1']))
-            svd_lora_layer.lora_coeffs_A['adapter2'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['adapter2']))
-            svd_lora_layer.lora_coeffs_B['adapter2'].copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['adapter2']))
+            svd_lora_layer.lora_coeffs_A['adapter1'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['adapter1'].weight))
+            svd_lora_layer.lora_coeffs_B['adapter1'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['adapter1'].weight))
+            svd_lora_layer.lora_coeffs_A['adapter2'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_A['adapter2'].weight))
+            svd_lora_layer.lora_coeffs_B['adapter2'].weight.copy_(torch.randn_like(svd_lora_layer.lora_coeffs_B['adapter2'].weight))
         
         # Check that both adapters exist
         assert 'adapter1' in svd_lora_layer.lora_coeffs_A
@@ -285,10 +288,10 @@ class TestSVDLoRA:
         assert 'adapter2' in svd_lora_layer.lora_coeffs_B
         
         # Check shapes
-        assert svd_lora_layer.lora_coeffs_A['adapter1'].shape == (4, 10)  # (r1, k)
-        assert svd_lora_layer.lora_coeffs_A['adapter2'].shape == (6, 10)  # (r2, k)
-        assert svd_lora_layer.lora_coeffs_B['adapter1'].shape == (10, 4)  # (k, r1)
-        assert svd_lora_layer.lora_coeffs_B['adapter2'].shape == (10, 6)  # (k, r2)
+        assert svd_lora_layer.lora_coeffs_A['adapter1'].weight.shape == (4, 10)  # (r1, k)
+        assert svd_lora_layer.lora_coeffs_A['adapter2'].weight.shape == (6, 10)  # (r2, k)
+        assert svd_lora_layer.lora_coeffs_B['adapter1'].weight.shape == (10, 4)  # (k, r1)
+        assert svd_lora_layer.lora_coeffs_B['adapter2'].weight.shape == (10, 6)  # (k, r2)
         
         # Test forward pass with different adapters
         x = torch.randn(5, 10)

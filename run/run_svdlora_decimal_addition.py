@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from peft import LoraConfig, get_peft_model
 
+
 # 定义用于十进制加法的模型
 class DecimalAdditionModel(nn.Module):
     def __init__(self, input_size=21, hidden_size=256, output_size=10):  # 输出0-9（个位数）
