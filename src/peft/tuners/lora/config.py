@@ -744,6 +744,15 @@ class LoraConfig(PeftConfig):
     arrow_config: Optional[ArrowConfig] = field(
         default=None, metadata={"help": "The necessary config to apply arrow routing on the model."}
     )
+    use_svdlora: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable SVD LoRA by setting this to True. This technique uses SVD decomposition for LoRA initialization "
+                "which can improve performance for certain tasks."
+            )
+        },
+    )
     ensure_weight_tying: bool = field(
         default=False,
         metadata={
@@ -856,6 +865,10 @@ class LoraConfig(PeftConfig):
                 "base weights; if you intend to do this, please ensure not to use rslora or rank_pattern/alpha_pattern."
             )
             warnings.warn(msg)
+
+        # Check for conflicting LoRA variants
+        if self.use_svdlora and (self.use_dora or self.alora_invocation_tokens is not None):
+            raise ValueError("SVD LoRA cannot be used together with DoRA or aLoRA. Please choose only one LoRA variant.")
 
         self._custom_modules: Optional[dict[type[nn.Module], type[nn.Module]]] = None
 

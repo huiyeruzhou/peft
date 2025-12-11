@@ -21,6 +21,7 @@ from .eva import get_eva_state_dict, initialize_lora_eva_weights
 from .gptq import GPTQLoraLinear
 from .layer import Conv2d, Conv3d, Embedding, Linear, LoraLayer, ParamWrapper
 from .model import LoraModel
+from .svdlora import SVDLoraLinear
 
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "LoraModel",
     "LoraRuntimeConfig",
     "ParamWrapper",
+    "SVDLoraLinear",
     "create_arrow_model",
     "get_eva_state_dict",
     "initialize_lora_eva_weights",

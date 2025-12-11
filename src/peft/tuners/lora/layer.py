@@ -2291,7 +2291,13 @@ def dispatch_default(
             )
             kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out = False
         kwargs.update(lora_config.loftq_config)
-        new_module = Linear(target, adapter_name, **kwargs)
+        # Add SVD LoRA support
+        kwargs["use_svdlora"] = lora_config.use_svdlora
+        if lora_config.use_svdlora:
+            from .svdlora import SVDLoraLinear
+            new_module = SVDLoraLinear(target, adapter_name, **kwargs)
+        else:
+            new_module = Linear(target, adapter_name, **kwargs)
     elif isinstance(target_base_layer, Conv1D):
         if not kwargs["fan_in_fan_out"]:
             warnings.warn(
@@ -2299,6 +2305,12 @@ def dispatch_default(
             )
             kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out = True
         kwargs.update(lora_config.loftq_config)
-        new_module = Linear(target, adapter_name, is_target_conv_1d_layer=True, **kwargs)
+        # Add SVD LoRA support
+        kwargs["use_svdlora"] = lora_config.use_svdlora
+        if lora_config.use_svdlora:
+            from .svdlora import SVDLoraLinear
+            new_module = SVDLoraLinear(target, adapter_name, is_target_conv_1d_layer=True, **kwargs)
+        else:
+            new_module = Linear(target, adapter_name, is_target_conv_1d_layer=True, **kwargs)
 
     return new_module
