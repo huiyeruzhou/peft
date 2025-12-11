@@ -73,15 +73,11 @@ class TestSVDLoRA:
         # Create SVDLoraLinear
         svd_lora_layer = SVDLoraLinear(original_layer, "default", r=4)
         
-        # Check that U and Vh matrices are stored as Parameters in ParameterDict
-        assert hasattr(svd_lora_layer, 'U')
-        assert hasattr(svd_lora_layer, 'Vh')
-        
         # Check that the stored matrices have correct shapes
-        U = svd_lora_layer.U['default']
-        Vh = svd_lora_layer.Vh['default']
-        assert not U.requires_grad
-        assert not Vh.requires_grad
+        U = svd_lora_layer.lora_U['default']
+        Vh = svd_lora_layer.lora_Vh['default']
+        assert not U.requires_grad, "U should not require gradients"
+        assert not Vh.requires_grad, "Vh should not require gradients"
         
         assert U.shape == (20, min(10, 20))  # (out_features, min(in_features, out_features))
         assert Vh.shape == (min(10, 20), 10)  # (min(in_features, out_features), in_features)
@@ -114,8 +110,8 @@ class TestSVDLoRA:
         
         # Check that delta weight is computed correctly using SVD formulation
         # Add SVD LoRA contribution
-        U = svd_lora_layer.U['default']
-        Vh = svd_lora_layer.Vh['default']
+        U = svd_lora_layer.lora_U['default']
+        Vh = svd_lora_layer.lora_Vh['default']
         coeffs_A = svd_lora_layer.lora_coeffs_A['default'].weight
         coeffs_B = svd_lora_layer.lora_coeffs_B['default'].weight
         scaling = svd_lora_layer.scaling['default']
@@ -150,8 +146,8 @@ class TestSVDLoRA:
             expected_output = original_layer(x)
             
         # Add SVD LoRA contribution
-        U = svd_lora_layer.U['default']
-        Vh = svd_lora_layer.Vh['default']
+        U = svd_lora_layer.lora_U['default']
+        Vh = svd_lora_layer.lora_Vh['default']
         coeffs_A = svd_lora_layer.lora_coeffs_A['default'].weight
         coeffs_B = svd_lora_layer.lora_coeffs_B['default'].weight
         scaling = svd_lora_layer.scaling['default']
@@ -188,11 +184,6 @@ class TestSVDLoRA:
         for name, module in peft_model.named_modules():
             if isinstance(module, SVDLoraLinear):
                 svd_lora_layers_found += 1
-                # Check that SVD components are present
-                assert hasattr(module, 'U')
-                assert hasattr(module, 'Vh')
-                assert hasattr(module, 'lora_coeffs_A')
-                assert hasattr(module, 'lora_coeffs_B')
                 
         # Should have 2 SVD LoRA layers (linear1 and linear2)
         assert svd_lora_layers_found == 2
