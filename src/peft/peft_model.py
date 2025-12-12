@@ -296,6 +296,14 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                 adapter_name=adapter_name,
                 save_embedding_layers=save_embedding_layers,
             )
+            if peft_config.use_svdlora:
+                svd_state_dict = get_peft_model_state_dict(
+                    self,
+                    state_dict=kwargs.get("state_dict", None),
+                    adapter_name=adapter_name,
+                    save_embedding_layers=save_embedding_layers,
+                    convert_svdlora=False,
+                )
             output_dir = os.path.join(save_directory, adapter_name) if adapter_name != "default" else save_directory
             os.makedirs(output_dir, exist_ok=True)
 
@@ -333,6 +341,12 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                     os.path.join(output_dir, SAFETENSORS_WEIGHTS_NAME),
                     metadata={"format": "pt"},
                 )
+                name, ext = os.path.splitext(SAFETENSORS_WEIGHTS_NAME)
+                safe_save_file(
+                    svd_state_dict,
+                    os.path.join(output_dir, f"{name}.svd{ext}"),
+                    metadata={"format": "pt"},
+                )
             elif is_main_process:
                 if path_initial_model_for_weight_conversion is not None:
                     peft_config = copy.deepcopy(peft_config)
@@ -342,6 +356,8 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                         peft_config, path_initial_model_for_weight_conversion, output_state_dict, kwargs
                     )
                 torch.save(output_state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+                name, ext = os.path.splitext(WEIGHTS_NAME)
+                torch.save(svd_state_dict, os.path.join(output_dir, f"{name}.svd{ext}"))
 
             # save the config and change the inference mode to `True`
             if peft_config.base_model_name_or_path is None:
@@ -547,7 +563,7 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                 else:
                     if "adapters" not in kwargs:
                         raise ValueError("If model_id is a local path, then `adapters` must be passed in kwargs.")
-
+        config.use_svdlora = kwargs.get("use_svdlora", False)
         if config.task_type not in MODEL_TYPE_TO_PEFT_MODEL_MAPPING.keys():
             model = cls(
                 model,
@@ -1165,7 +1181,7 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
 
     @classmethod
     def _split_kwargs(cls, kwargs: dict[str, Any]):
-        _kwargs_not_in_hf_hub_download_signature = ("use_auth_token",)
+        _kwargs_not_in_hf_hub_download_signature = ("use_auth_token", "use_svdlora")
         hf_hub_download_kwargs = {}
         other_kwargs = {}
 
@@ -1342,7 +1358,6 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
         hf_hub_download_kwargs, kwargs = self._split_kwargs(kwargs)
         if torch_device is None:
             torch_device = infer_device()
-
         if adapter_name not in self.peft_config:
             # load the config
             peft_config = PEFT_TYPE_TO_CONFIG_MAPPING[
@@ -1355,6 +1370,8 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                 ephemeral_gpu_offload=ephemeral_gpu_offload,
                 **hf_hub_download_kwargs,
             )
+            if kwargs.get("use_svdlora", False):
+                peft_config.use_svdlora = True
             self._check_new_adapter_config(peft_config, is_trainable=is_trainable)
             peft_config.inference_mode = not is_trainable
             self.add_adapter(adapter_name, peft_config, low_cpu_mem_usage=low_cpu_mem_usage)

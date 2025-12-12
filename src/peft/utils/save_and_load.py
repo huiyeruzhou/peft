@@ -55,7 +55,7 @@ def get_embedding_layer_name(model, layer, is_embedding_in_target_modules):
 
 
 def get_peft_model_state_dict(
-    model, state_dict=None, adapter_name="default", unwrap_compiled=False, save_embedding_layers="auto"
+    model, state_dict=None, adapter_name="default", unwrap_compiled=False, save_embedding_layers="auto", convert_svdlora=True
 ):
     """
     Get the state dict of the given adapter of the PEFT model.
@@ -130,6 +130,27 @@ def get_peft_model_state_dict(
                 return k
 
             to_return = {renamed_dora_weights(k): v for k, v in to_return.items()}
+        if config.use_svdlora:
+            if convert_svdlora:
+                names = list(to_return.keys())
+                for name in names:
+                    parts = name.split(".")
+                    if parts[-3] == "lora_coeffs_A" and parts[-1] == "weight":
+                        adapter_name = parts[-2]
+                        prefix = name.replace(f".lora_coeffs_A.{adapter_name}.weight", "")
+                        to_return[f"{prefix}.lora_A.{adapter_name}.weight"] = (to_return[f"{prefix}.lora_coeffs_A.{adapter_name}.weight"].detach() @ \
+                            to_return[f"{prefix}.lora_Vh.{adapter_name}"].detach()).detach()
+                        to_return.pop(f"{prefix}.lora_coeffs_A.{adapter_name}.weight")
+                        to_return.pop(f"{prefix}.lora_Vh.{adapter_name}")
+                        to_return[f"{prefix}.lora_B.{adapter_name}.weight"] = (to_return[f"{prefix}.lora_U.{adapter_name}"].detach() @ \
+                            to_return[f"{prefix}.lora_coeffs_B.{adapter_name}.weight"].detach()).detach()
+                        to_return.pop(f"{prefix}.lora_coeffs_B.{adapter_name}.weight")
+                        to_return.pop(f"{prefix}.lora_U.{adapter_name}")
+            else:
+                names = list(to_return.keys())
+                for name in names:
+                    if "lora_Vh" in name or "lora_U" in name:
+                        to_return.pop(name)
 
     elif config.peft_type == PeftType.BOFT:
         bias = config.bias
@@ -687,6 +708,8 @@ def load_peft_weights(
                 )
 
     if use_safetensors:
+        if hf_hub_download_kwargs.get("use_svdlora", False):
+            filename = os.path.splitext(filename)[0] + ".svd" + os.path.splitext(filename)[1]
         if hasattr(torch.backends, "mps") and (device == torch.device("mps")):
             adapters_weights = safe_load_file(filename, device="cpu")
         else:

@@ -296,39 +296,6 @@ class TestSVDLoRA:
         # Outputs should be different
         assert not torch.allclose(output1, output2)
     
-    def test_ckpt_content(self):
-        """Test that SVD LoRA checkpoint content matches expected format."""
-        # Create a simple model
-        model = SimpleModel()
-        
-        # Create a LoRA config with SVD LoRA
-        lora_config = LoraConfig(
-            r=4,
-            lora_alpha=32,
-            target_modules=["linear1", "linear2"],
-            use_svdlora=True,
-            bias="none"
-        )
-        
-        # Apply LoRA to the model
-        peft_model = get_peft_model(model, lora_config)
-        
-        # Save checkpoint
-        import tempfile
-        
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            peft_model.save_pretrained(tmpdirname)
-            
-            import safetensors
-            with safetensors.safe_open(f"{tmpdirname}/adapter_model.safetensors", framework="pt") as f:
-                # ['base_model.model.linear1.lora_U', 'base_model.model.linear1.lora_Vh', 'base_model.model.linear1.lora_coeffs_A.weight', 'base_model.model.linear1.lora_coeffs_B.weight', 'base_model.model.linear2.lora_U', 'base_model.model.linear2.lora_Vh', ...]
-                layer = ['linear1', 'linear2']
-                component = ['lora_U', 'lora_Vh', 'lora_coeffs_A.weight', 'lora_coeffs_B.weight']
-                
-                for l in layer:
-                    for c in component:
-                        assert f"base_model.model.{l}.{c}" in f.keys()
-
     def test_fsdp(self):
         def setup(rank, world_size):
             import os
@@ -362,9 +329,52 @@ class TestSVDLoRA:
         # Wrap model with FSDP
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
         from peft.utils.other import fsdp_auto_wrap_policy
-        peft_model = FSDP(peft_model, 
-                                              device_id=device,auto_wrap_policy=fsdp_auto_wrap_policy(peft_model))
+        peft_model = FSDP(peft_model, device_id=device, auto_wrap_policy=fsdp_auto_wrap_policy(peft_model))
         
         # Check that SVD LoRA parameters require gradients
         trainable_params = len([p for p in peft_model.parameters() if p.requires_grad])
         assert trainable_params == 4  # 2 params (A,B) * 2 layers (linear1, linear2)
+
+    def test_ckpt_content(self):
+        """Test that SVD LoRA checkpoint content matches expected format."""
+        # Create a simple model
+        model = SimpleModel()
+        
+        # Create a LoRA config with SVD LoRA
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=32,
+            target_modules=["linear1", "linear2"],
+            use_svdlora=True,
+            bias="none"
+        )
+        
+        # Apply LoRA to the model
+        peft_model = get_peft_model(model, lora_config)
+        
+        # Save checkpoint
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            peft_model.save_pretrained(tmpdirname)
+            
+            import safetensors
+            layer = ['linear1', 'linear2']
+            svd_component = ['lora_coeffs_A.weight', 'lora_coeffs_B.weight']
+            component = ['lora_A.weight', 'lora_B.weight']
+            with safetensors.safe_open(f"{tmpdirname}/adapter_model.safetensors", framework="pt") as f:
+                # assertEqual
+                assert set(f.keys()) == set([f"base_model.model.{l}.{c}" for l in layer for c in component])
+            with safetensors.safe_open(f"{tmpdirname}/adapter_model.svd.safetensors", framework="pt") as f:
+                # assertEqual
+                assert set(f.keys()) == set([f"base_model.model.{l}.{c}" for l in layer for c in svd_component])
+
+            peft_model.unload()
+            from peft import PeftModel
+            peft_model = PeftModel.from_pretrained(model, tmpdirname, use_svdlora=True, is_trainable=True)
+            assert peft_model.peft_config['default'].use_svdlora
+            peft_model.train()
+            trainable_params = len([p for p in peft_model.parameters() if p.requires_grad])
+            assert trainable_params == 4  # 2 params (A,B) * 2 layers (linear1, linear2)
+
+

@@ -205,37 +205,51 @@ print("Model saved to ./svdlora_addition_model")
 # 测试几个具体的加法例子
 print("\nTesting specific addition examples:")
 
+
+
+def test(peft_model):
+    # 创建测试用例
+    def create_test_case(num1_str, num2_str, max_digits=10):
+        # 将字符串转换为数字列表并补齐
+        digits1 = [int(d) for d in num1_str.zfill(max_digits)]
+        digits2 = [int(d) for d in num2_str.zfill(max_digits)]
+        PAD = 10
+        input_seq = digits1 + [PAD] + digits2
+        result = int(num1_str) + int(num2_str)
+        return input_seq, f"{num1_str} + {num2_str}", result
+
+    test_cases = [
+        create_test_case("12345", "67890", MAX_DIGITS),
+        create_test_case("9999999999", "1", MAX_DIGITS),
+        create_test_case("5555555555", "4444444444", MAX_DIGITS),
+        create_test_case("123", "456789", MAX_DIGITS),
+        create_test_case("0", "9999999999", MAX_DIGITS),
+    ]
+
+    with torch.no_grad():
+        for test_input, description, actual_result in test_cases:
+            test_tensor = torch.tensor([test_input]).to(device)
+            output = peft_model(test_tensor)
+            predicted = torch.argmax(output, dim=1).item()
+            actual_last_digit = actual_result % 10
+            status = "✓" if predicted == actual_last_digit else "✗"
+            print(f"{description} = ...{actual_last_digit} (actual), predicted: {predicted} {status}")
+
+print("Test without SVD LoRA loading:")
 base_model = DecimalAdditionModel(input_size=2*MAX_DIGITS + 1)
 base_model.load_state_dict(torch.load("./svdlora_addition_model/decimal_addition_model.pt"))
 from peft import PeftModel
 peft_model = PeftModel.from_pretrained(base_model, "./svdlora_addition_model")
 peft_model = peft_model.to(device)
 
+test(peft_model)
 
+print("Test SVD LoRA loading:")
+base_model = DecimalAdditionModel(input_size=2*MAX_DIGITS + 1)
+base_model.load_state_dict(torch.load("./svdlora_addition_model/decimal_addition_model.pt"))
 
-# 创建测试用例
-def create_test_case(num1_str, num2_str, max_digits=10):
-    # 将字符串转换为数字列表并补齐
-    digits1 = [int(d) for d in num1_str.zfill(max_digits)]
-    digits2 = [int(d) for d in num2_str.zfill(max_digits)]
-    PAD = 10
-    input_seq = digits1 + [PAD] + digits2
-    result = int(num1_str) + int(num2_str)
-    return input_seq, f"{num1_str} + {num2_str}", result
-
-test_cases = [
-    create_test_case("12345", "67890", MAX_DIGITS),
-    create_test_case("9999999999", "1", MAX_DIGITS),
-    create_test_case("5555555555", "4444444444", MAX_DIGITS),
-    create_test_case("123", "456789", MAX_DIGITS),
-    create_test_case("0", "9999999999", MAX_DIGITS),
-]
-
-with torch.no_grad():
-    for test_input, description, actual_result in test_cases:
-        test_tensor = torch.tensor([test_input]).to(device)
-        output = peft_model(test_tensor)
-        predicted = torch.argmax(output, dim=1).item()
-        actual_last_digit = actual_result % 10
-        status = "✓" if predicted == actual_last_digit else "✗"
-        print(f"{description} = ...{actual_last_digit} (actual), predicted: {predicted} {status}")
+from peft import PeftModel
+peft_model = PeftModel.from_pretrained(base_model, "./svdlora_addition_model", use_svdlora=True)
+peft_model = peft_model.to(device)
+print(f"{peft_model.peft_config['default'].use_svdlora=}")
+test(peft_model)

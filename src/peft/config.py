@@ -140,6 +140,8 @@ class PeftConfigMixin(PushToHubMixin):
                 Additional keyword arguments passed along to the [`~transformers.utils.PushToHubMixin.push_to_hub`]
                 method.
         """
+        # we save svdlora as a standard lora adapter mmodel
+        self.use_svdlora = False
         if os.path.isfile(save_directory):
             raise AssertionError(f"Provided path ({save_directory}) should be a directory, not a file")
 

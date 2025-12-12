@@ -242,3 +242,28 @@ class SVDLoraLinear(nn.Module, LoraLayer):
     def __repr__(self) -> str:
         rep = super().__repr__()
         return "lora." + rep
+    
+    # override state_dict
+    # def state_dict(self, *args, **kwargs):
+    #     state_dict = super().state_dict(*args, **kwargs)
+
+    #     """convert SVD LoRA weights to standard LoRA weights"""
+    #     # {prefix}.lora_coeffs_A.{adapter_name}.weight @ {prefix}.Vh.{adapter_name} -> {{prefix}}.lora_A.{adapter_name}.weight
+    #     # {prefix}.U.{adapter_name} @ {prefix}.lora_coeffs_B.{adapter_name}.weight -> {prefix}.lora_B.{adapter_name}.weight
+    #     names = list(state_dict.keys())
+    #     for name in names:
+    #         parts = name.split(".")
+    #         if parts[-3] == "lora_coeffs_A" and parts[-1] == "weight":
+    #             adapter_name = parts[-2]
+    #             prefix = name.replace(f".lora_coeffs_A.{adapter_name}.weight", "")
+    #             state_dict[f"{prefix}.lora_A.{adapter_name}.weight"] = (state_dict[f"{prefix}.lora_coeffs_A.{adapter_name}.weight"].detach() @ \
+    #                 state_dict[f"{prefix}.lora_Vh.{adapter_name}"].detach()).detach()
+    #             state_dict.pop(f"{prefix}.lora_coeffs_A.{adapter_name}.weight")
+    #             state_dict.pop(f"{prefix}.lora_Vh.{adapter_name}")
+    #             state_dict[f"{prefix}.lora_B.{adapter_name}.weight"] = (state_dict[f"{prefix}.lora_U.{adapter_name}"].detach() @ \
+    #                 state_dict[f"{prefix}.lora_coeffs_B.{adapter_name}.weight"].detach()).detach()
+    #             state_dict.pop(f"{prefix}.lora_coeffs_B.{adapter_name}.weight")
+    #             state_dict.pop(f"{prefix}.lora_U.{adapter_name}")
+                
+    #     return state_dict
+
