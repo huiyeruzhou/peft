@@ -296,6 +296,40 @@ class TestSVDLoRA:
         # Outputs should be different
         assert not torch.allclose(output1, output2)
     
+    def test_ckpt_content(self):
+        """Test that SVD LoRA checkpoint content matches expected format."""
+        # Create a simple model
+        model = SimpleModel()
+        
+        # Create a LoRA config with SVD LoRA
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=32,
+            target_modules=["linear1", "linear2"],
+            use_svdlora=True,
+            bias="none"
+        )
+        
+        # Apply LoRA to the model
+        peft_model = get_peft_model(model, lora_config)
+        
+        # Save checkpoint
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            peft_model.save_pretrained(tmpdirname)
+            
+            import safetensors
+            layer = ['linear1', 'linear2']
+            svd_component = ['lora_coeffs_A.weight', 'lora_coeffs_B.weight']
+            component = ['lora_A.weight', 'lora_B.weight']
+            with safetensors.safe_open(f"{tmpdirname}/adapter_model.safetensors", framework="pt") as f:
+                # assertEqual
+                assert set(f.keys()) == set([f"base_model.model.{l}.{c}" for l in layer for c in component])
+            with safetensors.safe_open(f"{tmpdirname}/adapter_model.safetensors.svd", framework="pt") as f:
+                # assertEqual
+                assert set(f.keys()) == set([f"base_model.model.{l}.{c}" for l in layer for c in svd_component])
+
     def test_fsdp(self):
         def setup(rank, world_size):
             import os

@@ -17,8 +17,66 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def get_device_name():
+    if torch.cuda.is_available():
+        return "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"  # macOS Metal
+    elif hasattr(torch, "npu") and torch.npu.is_available():
+        return "npu"  # Ascend NPU / 华为昇腾
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"  # Intel GPU / XPU
+    else:
+        return "cpu"
+    
+def empty_device_cache(device: str):
+    if device == "cpu":
+        return
+    elif device == "cuda":
+        torch.cuda.empty_cache()
+    elif device == "mps":
+        return
+    elif device == "npu":
+        torch.npu.empty_cache()
+    elif device == "xpu":
+        torch.xpu.empty_cache()
+
 from .layer import LoraLayer
 
+class LinearSVDWrapper(nn.Linear):
+    def __init__(self, linear: nn.Linear, U: torch.Tensor, S: torch.Tensor, Vh: torch.Tensor):
+        # init Module, not nn.Linear
+        super(nn.Linear, self).__init__()
+        in_features = linear.in_features
+        out_features = linear.out_features
+        mid = min(out_features, in_features)
+        assert U.shape == (out_features, out_features), f"U shape must be ({out_features}, {out_features}), got {U.shape}"
+        assert S.shape == (mid,), f"S shape must be ({mid},), got {S.shape}"
+        assert Vh.shape == (mid, in_features), f"Vh shape must be ({mid}, {in_features}), got {Vh.shape}"
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        if linear.bias is not None:
+            self.bias = nn.Parameter(torch.empty(self.out_features,
+                                                 dtype=linear.bias.dtype, 
+                                                 device=linear.bias.device))
+        else:
+            self.register_parameter("bias", None)
+        self.U = nn.Parameter(U)
+        self.S = nn.Parameter(S)
+        self.Vh = nn.Parameter(Vh)
+        self.register_parameter("weight", None)
+        
+    @property
+    def weight(self):
+        return nn.Parameter((self.U * self.S) @ self.Vh)
+
+    def forward(self, x: torch.Tensor):
+        tmp = x @ self.Vh.T
+        tmp = tmp * self.S  # broadcast along rank dimension, avoid torch.diag(self.S)
+        out = tmp @ self.U.T  # [B, out_features]
+        if self.bias is not None:
+            out += self.bias
+        return out
 class SVDLoraLinear(nn.Module, LoraLayer):
     """SVD LoRA implemented in a dense layer using SVD decomposition."""
     
@@ -84,24 +142,35 @@ class SVDLoraLinear(nn.Module, LoraLayer):
     ):
         # Store SVD dimensions first to determine correct shapes
         base_weight = self.get_base_layer().weight
+        dtype = base_weight.dtype
+        device = base_weight.device
         with torch.no_grad():
-            W = base_weight.data.float()
+            better_device = get_device_name()
+            # Convert to float32 and move to gpu/xpu/npu/mps if it is available for better performance and percision
+            W = base_weight.data.float().to(better_device)
             lora_U, S, lora_Vh = torch.linalg.svd(W, full_matrices=False)
             
-            dtype = base_weight.dtype
             # Store lora_U and lora_Vh matrices as parameters without gradients in ParameterDict
-            self.lora_U[adapter_name] = nn.Parameter(lora_U.to(dtype).contiguous(), requires_grad=False)   # Frozen Output Basis
-            self.lora_Vh[adapter_name] = nn.Parameter(lora_Vh.to(dtype).contiguous(), requires_grad=False) # Frozen Input Basis
+            self.lora_U[adapter_name] = nn.Parameter(lora_U.to(dtype).contiguous().to(device), requires_grad=False)   # Frozen Output Basis
+            self.lora_Vh[adapter_name] = nn.Parameter(lora_Vh.to(dtype).contiguous().to(device), requires_grad=False) # Frozen Input Basis
             
             # Store SVD dimensions
             k = lora_U.shape[1]  # Number of singular values
+
+            # try to empty cache
+            del W
+            # import gc
+            # gc.collect()
+            # even save more 
+            # self.base_layer = LinearSVDWrapper(self.get_base_layer(), lora_U, S, lora_Vh)
+            empty_device_cache(better_device)
             
         # Create coefficient parameters specifically for SVD LoRA
         # Coefficients for A (Input side) - shape (r, k)
         if not hasattr(self, 'lora_coeffs_A'):
             self.lora_coeffs_A = nn.ModuleDict()
         # Using Linear layer without bias to store coefficients as trainable parameters
-        lora_A_layer = nn.Linear(k, r, bias=False)
+        lora_A_layer = nn.Linear(k, r, bias=False, dtype=dtype, device=device)
         # Initialize with zeros
         with torch.no_grad():
             lora_A_layer.weight.zero_()
@@ -111,7 +180,7 @@ class SVDLoraLinear(nn.Module, LoraLayer):
         if not hasattr(self, 'lora_coeffs_B'):
             self.lora_coeffs_B = nn.ModuleDict()
         # Using Linear layer without bias to store coefficients as trainable parameters
-        lora_B_layer = nn.Linear(r, k, bias=False)
+        lora_B_layer = nn.Linear(r, k, bias=False, dtype=dtype, device=device)
         # Initialize with zeros
         with torch.no_grad():
             lora_B_layer.weight.zero_()
